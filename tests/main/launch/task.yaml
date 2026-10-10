@@ -1,0 +1,19 @@
+summary: Launch a workshop with the vllm SDK and verify the runtime
+
+prepare: |
+  envsubst '${BASE}' <workshop.yaml.in >workshop.yaml
+  workshop launch
+
+restore: |
+  workshop remove || true
+
+execute: |
+  workshop info | MATCH 'status:\s+ready'
+  workshop exec -- bash -lc 'vllm --version' | MATCH "^${EXPECTED_VERSION}"
+  # The torch build matches the track's accelerator.
+  workshop exec -- vllm-python -c 'import torch; print("cuda" if torch.version.cuda else "cpu")' | MATCH "^${ACCEL}$"
+  # The server is opt-in: disabled until VLLM_MODEL is set.
+  workshop exec -- bash -lc 'systemctl --user is-enabled vllm || true' | MATCH '^disabled$'
+
+debug: |
+  workshop tasks

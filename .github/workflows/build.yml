@@ -1,0 +1,18 @@
+name: Build SDK
+permissions: {}
+
+on:
+  pull_request:
+    branches:
+      - cpu
+      - cuda
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: canonical/sdkcraft-actions/.github/workflows/build.yml@edbbef4be311aa1a21442412e2477e1b98cf5c84 # main
+    with:
+      runs-on: '["ubuntu-latest"]'

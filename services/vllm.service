@@ -1,0 +1,12 @@
+[Unit]
+Description=vLLM OpenAI-compatible server (vllm serve)
+After=network.target
+
+[Service]
+EnvironmentFile=%h/.config/vllm/server.env
+ExecStart=/bin/bash -lc 'exec vllm serve "$VLLM_MODEL" --host 0.0.0.0 --port 8000 $VLLM_SERVE_ARGS'
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,33 @@
+summary: Serve a small model on the cpu track and query it from the host
+
+kill-timeout: 60m
+
+prepare: |
+  envsubst '${BASE}' <workshop.yaml.in >workshop.yaml
+  workshop launch
+
+restore: |
+  workshop remove || true
+
+execute: |
+  if [ "$ACCEL" != cpu ]; then
+    echo "serving needs a GPU on the ${ACCEL} track; skipped"
+    exit 0
+  fi
+  # This task directory is the workshop's /project.
+  workshop exec -- cp /project/server.env /home/workshop/.config/vllm/server.env
+  workshop refresh
+  for _ in $(seq 120); do
+    curl -sf http://localhost:8000/health && break
+    sleep 10
+  done
+  curl -sf http://localhost:8000/v1/completions \
+    -H 'Content-Type: application/json' \
+    -d '{"model":"facebook/opt-125m","prompt":"San Francisco is a","max_tokens":7,"temperature":0}' \
+    | MATCH '"text"'
+  # Downloaded weights persist on the models mount across workshop updates.
+  workshop refresh
+  workshop exec -- test -d /home/workshop/.cache/huggingface/hub/models--facebook--opt-125m
+
+debug: |
+  workshop tasks

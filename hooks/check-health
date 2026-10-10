@@ -1,0 +1,11 @@
+#!/usr/bin/bash
+# Runs as root after setup-project. Reports SDK health within 5 seconds, so it
+# never imports torch and never polls the opt-in server (model loads take
+# minutes).
+set -euo pipefail
+
+if ! output=$(sudo -u workshop --login vllm-python -c 'import importlib.metadata as m; print(m.version("vllm"))' 2>&1); then
+    workshopctl set-health error "vLLM runtime is not usable: ${output}"
+    exit 0
+fi
+workshopctl set-health okay

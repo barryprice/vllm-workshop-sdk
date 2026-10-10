@@ -1,0 +1,43 @@
+#!/usr/bin/bash
+# Runs as the workshop user after interfaces are connected.
+# Prepares the mount targets and an opt-in `vllm` user service.
+set -euo pipefail
+
+# Mount targets: Hugging Face model cache, vLLM compile cache, server config.
+mkdir -p ~/.cache/huggingface ~/.cache/vllm ~/.config/vllm
+
+# Seed a server configuration the first time. The server stays off until the
+# user sets VLLM_MODEL; see the auto-enable logic below.
+if [ ! -f ~/.config/vllm/server.env ]; then
+    cat >~/.config/vllm/server.env <<'EOF'
+# Configuration for the opt-in `vllm` user service (`vllm serve` on 0.0.0.0:8000).
+# The service stays disabled while VLLM_MODEL is empty. After editing, run
+# `workshop refresh`, or `systemctl --user enable --now vllm` inside the workshop
+# (`systemctl --user restart vllm` if it is already running).
+#
+# Model to serve: a Hugging Face repo id or a local path, e.g.
+#   VLLM_MODEL="Qwen/Qwen3-0.6B"
+VLLM_MODEL=""
+# Extra `vllm serve` arguments, e.g.
+#   VLLM_SERVE_ARGS="--max-model-len 8192 --gpu-memory-utilization 0.85"
+VLLM_SERVE_ARGS=""
+# Uncomment for gated or private Hugging Face models.
+#HF_TOKEN=""
+# Uncomment to require `Authorization: Bearer <key>` on API requests.
+#VLLM_API_KEY=""
+EOF
+fi
+
+# Install the (opt-in) systemd user unit.
+install -D --mode=644 "${SDK}/vllm.service" ~/.config/systemd/user/vllm.service
+systemctl --user daemon-reload
+
+# Enable the server only once a model is configured: edit server.env, then
+# refresh, and it starts.
+# shellcheck disable=SC1090
+. ~/.config/vllm/server.env 2>/dev/null || true
+if [ -n "${VLLM_MODEL:-}" ]; then
+    systemctl --user enable --now vllm
+else
+    systemctl --user disable --now vllm 2>/dev/null || true
+fi

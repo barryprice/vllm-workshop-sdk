@@ -1,0 +1,4 @@
+name: test-vllm
+base: ${BASE}
+sdks:
+  - name: try-vllm

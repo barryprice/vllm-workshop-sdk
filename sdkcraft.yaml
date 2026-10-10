@@ -1,0 +1,138 @@
+name: vllm
+adopt-info: vllm
+summary: vLLM high-throughput LLM inference and serving engine
+description: |
+  This SDK provides vLLM, a high-throughput inference and serving engine for
+  large language models, with its OpenAI-compatible API server. A Python 3.12
+  runtime with vLLM and PyTorch is prebuilt into the SDK; each accelerator is
+  published on its own track: cuda and cpu. Downloaded models,
+  compilation caches and server configuration are persisted on the host
+  across workshop updates, and an opt-in vllm serve service is exposed on
+  port 8000.
+license: Apache-2.0
+platforms:
+  ubuntu@24.04:amd64:
+  ubuntu@24.04:arm64:
+  ubuntu@26.04:amd64:
+  ubuntu@26.04:arm64:
+
+plugs:
+  gpu:
+    interface: gpu
+  models:
+    interface: mount
+    workshop-target: /home/workshop/.cache/huggingface
+  cache:
+    interface: mount
+    workshop-target: /home/workshop/.cache/vllm
+  config:
+    interface: mount
+    workshop-target: /home/workshop/.config/vllm
+    mode: 0o700
+
+slots:
+  vllm-server:
+    interface: tunnel
+    endpoint: 8000
+
+parts:
+  # The accelerator build is selected by the branch-only ACCELERATOR file
+  # (cuda | cpu); VERSION holds the vLLM release. `nil` rather than
+  # the uv plugin so `source: .` never copies build dirs or packed *.sdk
+  # files into the part.
+  vllm:
+    plugin: nil
+    build-snaps:
+      - astral-uv
+    build-packages:
+      - ca-certificates
+      - curl
+      - jq
+    build-environment:
+      - UV_PYTHON_DOWNLOADS: "manual"
+      - UV_PYTHON_PREFERENCE: "managed"
+      - UV_NO_CACHE: "1"
+    override-pull: |
+      VERSION=$(cat "$CRAFT_PROJECT_DIR/VERSION")
+      craftctl set version="$VERSION"
+    override-build: |
+      set -euo pipefail
+      VERSION=$(cat "$CRAFT_PROJECT_DIR/VERSION")
+      ACCEL=$(cat "$CRAFT_PROJECT_DIR/ACCELERATOR")
+      case "$CRAFT_ARCH_BUILD_FOR" in
+        amd64) PYARCH=x86_64 ;;
+        arm64) PYARCH=aarch64 ;;
+        *) echo "Unsupported architecture: $CRAFT_ARCH_BUILD_FOR" >&2; exit 1 ;;
+      esac
+
+      # Bundle uv-managed Python 3.12 inside the SDK — fully self-contained,
+      # no system Python required at runtime on any base.
+      # Do NOT call craftctl default: the uv plugin's built-in venv step
+      # always rewrites bin/python* to the snap-internal path which is dead
+      # inside a workshop. We do everything manually instead.
+      export UV_PYTHON_INSTALL_DIR="$CRAFT_PART_INSTALL/python-runtime"
+      uv python install 3.12
+      PYTHON=$(uv python find 3.12)
+      # --seed pre-installs pip so Workshop finds it and skips ensurepip.
+      uv venv --seed --allow-existing --relocatable --python "$PYTHON" "$CRAFT_PART_INSTALL"
+      PYTHON_REL=$(realpath --relative-to="$CRAFT_PART_INSTALL/bin" "$PYTHON")
+      ln -snf "$PYTHON_REL" "$CRAFT_PART_INSTALL/bin/python"
+      ln -snf python "$CRAFT_PART_INSTALL/bin/python3"
+      ln -snf python "$CRAFT_PART_INSTALL/bin/python3.12"
+
+      # Bytecode is compiled now because the SDK tree is read-only at runtime.
+      INSTALL=(uv pip install --python "$CRAFT_PART_INSTALL/bin/python" --compile-bytecode)
+      case "$ACCEL" in
+        cuda)
+          # The PyPI wheel is the CUDA build; torch's nvidia-* dependencies
+          # carry the CUDA runtime. No --torch-backend: `auto` would probe the
+          # GPU-less build host.
+          "${INSTALL[@]}" "vllm==${VERSION}"
+          ;;
+        cpu)
+          # CPU wheels are GitHub release assets; their manylinux tag varies
+          # between releases, so resolve the asset name from the release.
+          WHEEL_URL=$(curl -fsSL "https://api.github.com/repos/vllm-project/vllm/releases/tags/v${VERSION}" \
+            | jq -r --arg p "vllm-${VERSION}+cpu-cp38-abi3-manylinux_" --arg s "_${PYARCH}.whl" \
+              '.assets[] | select((.name|startswith($p)) and (.name|endswith($s))) | .browser_download_url' \
+            | head -n1)
+          if [ -z "$WHEEL_URL" ]; then
+            echo "No vLLM ${VERSION} CPU wheel for ${PYARCH}" >&2
+            exit 1
+          fi
+          "${INSTALL[@]}" "$WHEEL_URL" --torch-backend cpu
+          ;;
+        *)
+          echo "Unknown ACCELERATOR '${ACCEL}'" >&2
+          exit 1
+          ;;
+      esac
+
+      # Guard against silently resolving the wrong vLLM or torch build.
+      "$CRAFT_PART_INSTALL/bin/python" - "$ACCEL" "$VERSION" <<'PY'
+      import importlib.metadata
+      import sys
+
+      import torch
+
+      accel, version = sys.argv[1:3]
+      vllm_version = importlib.metadata.version("vllm")
+      assert vllm_version.split("+")[0] == version, f"vllm {vllm_version} != {version}"
+      if accel == "cuda":
+          assert torch.version.cuda and torch.version.hip is None, f"torch {torch.__version__} is not a CUDA build"
+      else:
+          assert torch.version.cuda is None and torch.version.hip is None, f"torch {torch.__version__} is not a CPU build"
+      print(f"vllm {vllm_version} torch {torch.__version__} accel {accel}")
+      PY
+
+      if grep -q "$CRAFT_PART_INSTALL" "$CRAFT_PART_INSTALL/bin/vllm"; then
+        echo "bin/vllm is not relocatable" >&2
+        exit 1
+      fi
+
+      # Build-to-runtime marker read by the hooks.
+      echo "$ACCEL" > "$CRAFT_PART_INSTALL/accelerator"
+  services:
+    plugin: dump
+    source: services
+    source-type: local

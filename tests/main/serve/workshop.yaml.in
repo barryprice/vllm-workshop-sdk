@@ -1,0 +1,9 @@
+name: test-vllm
+base: ${BASE}
+sdks:
+  - name: system
+    plugs:
+      vllm-server:
+        interface: tunnel
+        endpoint: localhost:8000
+  - name: try-vllm

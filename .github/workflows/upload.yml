@@ -1,0 +1,41 @@
+name: Build and Upload SDK
+permissions: {}
+
+on:
+  push:
+    branches:
+      - cpu
+      - cuda
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch name (cpu or cuda)"
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+# The Store track defaults to the branch name: cpu/edge, cuda/edge.
+jobs:
+  amd64:
+    uses: canonical/sdkcraft-actions/.github/workflows/upload.yml@edbbef4be311aa1a21442412e2477e1b98cf5c84 # main
+    with:
+      ref: ${{ inputs.branch || github.ref }}
+      runs-on: '["ubuntu-24.04"]'
+      platforms: '["ubuntu@24.04:amd64","ubuntu@26.04:amd64"]'
+      platform-flag: "--platform"
+      risk: "edge"
+    secrets:
+      SDKCRAFT_STORE_CREDENTIALS: ${{ secrets.SDKCRAFT_STORE_CREDENTIALS_PROD }}
+  arm64:
+    uses: canonical/sdkcraft-actions/.github/workflows/upload.yml@edbbef4be311aa1a21442412e2477e1b98cf5c84 # main
+    with:
+      ref: ${{ inputs.branch || github.ref }}
+      runs-on: '["ubuntu-24.04-arm"]'
+      platforms: '["ubuntu@24.04:arm64","ubuntu@26.04:arm64"]'
+      platform-flag: "--platform"
+      risk: "edge"
+    secrets:
+      SDKCRAFT_STORE_CREDENTIALS: ${{ secrets.SDKCRAFT_STORE_CREDENTIALS_PROD }}

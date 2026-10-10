@@ -1,0 +1,7 @@
+# sdkcraft build artifacts
+*.sdk
+/parts/
+/stage/
+/prime/
+/.craft/
+/tests/.spread-reuse.yaml

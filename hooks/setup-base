@@ -1,0 +1,54 @@
+#!/usr/bin/bash
+# Runs as root on launch and refresh.
+# Installs runtime packages and exposes the vLLM entry points on PATH.
+set -euo pipefail
+
+ACCEL=$(cat "${SDK}/accelerator")
+
+cat <<'EOF' >/etc/profile.d/vllm.sh
+# Opt out of vLLM usage-statistics reporting.
+export VLLM_NO_USAGE_STATS=1
+EOF
+
+# Triton (CUDA) and torch.compile (CPU) JIT-compile C/C++ at runtime.
+# The CPU build preloads tcmalloc and uses NUMA.
+pkgs="gcc g++ libc6-dev"
+if [ "${ACCEL}" = cpu ]; then
+    pkgs="${pkgs} libtcmalloc-minimal4 libnuma1"
+fi
+apt-get update
+# shellcheck disable=SC2086
+eatmydata apt-get install ${pkgs}
+
+# vLLM's CPU backend expects tcmalloc and Intel OpenMP to be preloaded. Scope
+# LD_PRELOAD to the vLLM wrappers only, never system-wide.
+PRELOAD=""
+if [ "${ACCEL}" = cpu ]; then
+    for lib in "$(find /usr/lib -name 'libtcmalloc_minimal.so.4' -print -quit)" \
+        "$(find "${SDK}" -name 'libiomp5.so' -print -quit)"; do
+        if [ -n "${lib}" ]; then
+            PRELOAD="${PRELOAD:+${PRELOAD}:}${lib}"
+        fi
+    done
+fi
+if [ -n "${PRELOAD}" ]; then
+    PRELOAD_LINE="export LD_PRELOAD=\"${PRELOAD}\${LD_PRELOAD:+:\$LD_PRELOAD}\""
+else
+    PRELOAD_LINE=""
+fi
+
+# Wrappers rather than symlinks, and never ${SDK}/bin on PATH: its python
+# would shadow the system interpreter. vllm-python runs the offline
+# `from vllm import LLM` API on the SDK's interpreter.
+install -d /usr/local/bin
+cat <<EOF >/usr/local/bin/vllm
+#!/usr/bin/bash
+${PRELOAD_LINE}
+exec "${SDK}/bin/vllm" "\$@"
+EOF
+cat <<EOF >/usr/local/bin/vllm-python
+#!/usr/bin/bash
+${PRELOAD_LINE}
+exec "${SDK}/bin/python" "\$@"
+EOF
+chmod 0755 /usr/local/bin/vllm /usr/local/bin/vllm-python
